@@ -1,7 +1,9 @@
 import os
-import httpx
+import threading
+import asyncio
+from fastapi import FastAPI
+import uvicorn
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
-
 # 🔑 Tokens
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # render: defina no dashboard
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -37,7 +39,7 @@ async def respond_to_message(update, context):
     # Enviar resposta para o usuário
     await update.message.reply_text(reply)
 
-def main():
+def run_bot():
     if not BOT_TOKEN:
         raise ValueError("Bot token not found")
     app = Application.builder().token(BOT_TOKEN).build()
@@ -45,5 +47,16 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, respond_to_message))
     app.run_polling()
 
-if __name__ == "__main__":
-    main()
+api = FastAPI()
+
+@api.get("/")
+def read_root():
+    return {"status": "ok", "message": "Bot está rodando no Render 🚀"}
+
+def run_http():
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(api, host="0.0.0.0", port=port)
+
+if __name__ == '__main__':
+    threading.Thread(target=run_bot, daemon=True).start()
+    run_http()
