@@ -5,7 +5,7 @@ from fastapi import FastAPI
 import uvicorn
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 # 🔑 Tokens
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # render: defina no dashboard
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # render: def    ina no dashboard
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --- TELEGRAM BOT HANDLERS ---
