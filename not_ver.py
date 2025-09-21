@@ -28,6 +28,36 @@ if not GROQ_KEY:
     raise ValueError("GROQ_API_KEY is required")
 groq_client = Groq(api_key=GROQ_KEY)
 
+async def test_groq_connection():
+    """Test Groq API connection and find working model"""
+    models_to_test = [
+        "llama-3.1-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama3-70b-8192", 
+        "llama3-8b-8192",
+        "mixtral-8x7b-32768",
+        "gemma-7b-it"
+    ]
+    
+    logger.info("Testing Groq API connection...")
+    
+    for model in models_to_test:
+        try:
+            resp = groq_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=10
+            )
+            if resp and resp.choices:
+                logger.info(f"✅ Model {model} is working!")
+                return model
+        except Exception as e:
+            logger.warning(f"❌ Model {model} failed: {e}")
+            continue
+    
+    logger.error("❌ No working Groq models found!")
+    return None
+
 # Initialize FastAPI app
 app = FastAPI()
 
@@ -47,18 +77,47 @@ async def chat(update: Update, context):
     user_text = update.message.text
     user_id = update.effective_user.id
     logger.info(f"Received message from user {user_id}: {user_text[:50]}...")
-    try:
-        # Use a supported model instead of the decommissioned one
-        resp = groq_client.chat.completions.create(
-            model="groq/compound",  # Updated to supported model
-            messages=[{"role": "user", "content": user_text}],
-        )
-        content = resp.choices[0].message.content if resp and resp.choices else "❌ Erro na resposta da API"
-        await update.message.reply_text(content)
-        logger.info(f"Sent response to user {user_id}: {content[:50]}...")
-    except Exception as e:
-        logger.error(f"Error in chat handler for user {user_id}: {e}")
-        await update.message.reply_text("❌ Ocorreu um erro ao processar sua mensagem.")
+    
+    # List of models to try (in order of preference)
+    models_to_try = [
+        "llama-3.1-70b-versatile",
+        "llama-3.1-8b-instant", 
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "mixtral-8x7b-32768",
+        "gemma-7b-it"
+    ]
+    
+    for model in models_to_try:
+        try:
+            logger.info(f"Trying model: {model}")
+            resp = groq_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "Você é um assistente útil. Responda de forma clara e concisa."},
+                    {"role": "user", "content": user_text}
+                ],
+                max_tokens=1000,
+                temperature=0.7
+            )
+            
+            if resp and resp.choices and resp.choices[0].message.content:
+                content = resp.choices[0].message.content
+                await update.message.reply_text(content)
+                logger.info(f"Success with model {model}. Response sent to user {user_id}")
+                return
+            else:
+                logger.warning(f"Empty response from model {model}")
+                continue
+                
+        except Exception as e:
+            logger.error(f"Error with model {model} for user {user_id}: {e}")
+            continue
+    
+    # If all models failed
+    error_msg = "❌ Desculpe, todos os modelos estão indisponíveis no momento. Tente novamente mais tarde."
+    await update.message.reply_text(error_msg)
+    logger.error(f"All models failed for user {user_id}")
 
 def setup_handlers(application: Application):
     logger.info("Setting up Telegram handlers")
@@ -71,7 +130,7 @@ async def index():
     logger.info("Received GET request to root")
     return {"status": "ok"}
 
-@app.post("/")  # Add POST handler for potential webhooks
+@app.post("/")
 async def webhook():
     return {"status": "ok"}
 
@@ -92,31 +151,42 @@ async def run_bot():
         await telegram_app.updater.start_polling()
         logger.info("Telegram bot polling started")
         
-        # Fixed: Use the updater's idle method instead of wait
-        return telegram_app.updater.idle()
+        # Keep running indefinitely
+        while True:
+            await asyncio.sleep(1)
         
     except Exception as e:
         logger.critical(f"Failed to start bot: {e}")
+        raise
+
+async def run_server():
+    try:
+        logger.info(f"Starting Uvicorn on port {PORT}")
+        config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+    except Exception as e:
+        logger.error(f"Server error: {e}")
         raise
 
 async def main():
     try:
         logger.info("Starting main application")
         
-        # Start the Telegram bot in the background
-        bot_task = asyncio.create_task(run_bot())
-        logger.info("Bot task created")
-
-        # Start Uvicorn server
-        logger.info(f"Starting Uvicorn on port {PORT}")
-        config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
-        server = uvicorn.Server(config)
+        # Test Groq connection first
+        working_model = await test_groq_connection()
+        if not working_model:
+            logger.critical("No working Groq models found. Check your API key and model availability.")
+            # Don't return, let it try to run anyway
         
-        # Run both the bot and server concurrently
-        await asyncio.gather(
-            server.serve(),
-            bot_task
-        )
+        # Create both tasks
+        bot_task = asyncio.create_task(run_bot())
+        server_task = asyncio.create_task(run_server())
+        
+        logger.info("Bot and server tasks created")
+        
+        # Wait for both tasks to complete (they shouldn't under normal circumstances)
+        await asyncio.gather(bot_task, server_task, return_exceptions=True)
         
     except Exception as e:
         logger.critical(f"Main loop error: {e}")
