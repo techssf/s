@@ -1,63 +1,64 @@
 import os
-import asyncio
-import httpx
+import threading
 from fastapi import FastAPI
 import uvicorn
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from groq import Groq
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# --- Handlers do Telegram ---
-async def start(update, context):
-	await update.message.reply_text("Olá! Sou seu LeidaSF do Liedson 🚀. Envie uma mensagem!")
+groq_client = Groq(api_key=GROQ_API_KEY)
 
-async def respond_to_message(update, context):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+	await update.message.reply_text(
+		"Olá! Sou seu LeidaSF do Liedson 🚀. Envie uma mensagem!"
+	)
+
+async def respond_to_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 	user_message = update.message.text
-	async with httpx.AsyncClient(timeout=60) as client:
-		resp = await client.post(
-			"https://api.groq.com/openai/v1/chat/completions",
-			headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-			json={
-				"model": "mixtral-8x7b-32768",
-				"messages": [
-					{"role": "system", "content": "Responda de forma breve, divertida e em português."},
-					{"role": "user", "content": user_message},
-				],
-			},
+	try:
+		# >>> Usa o MESMO modelo anterior <<<
+		resp = groq_client.chat.completions.create(
+			model="groq/compound",  # mesmo modelo que você usava
+			messages=[
+				{"role": "system",
+				 "content": "Responda de forma breve, divertida e em português. "
+				            "Olá! Sou seu LeidaSF do Liedson 🚀. Envie uma mensagem!"},
+				{"role": "user", "content": user_message},
+			],
 		)
-	reply = resp.json()["choices"][0]["message"]["content"]
-	await update.message.reply_text(reply)
 
-# --- FastAPI ---
+		if not resp.choices:
+			await update.message.reply_text("⚠️ Nenhuma resposta recebida da IA.")
+			return
+
+		reply = resp.choices[0].message.content
+		await update.message.reply_text(reply)
+
+	except Exception as e:
+		print("Erro na Groq:", e)
+		await update.message.reply_text("⚠️ Erro ao processar a resposta da IA.")
+
+def run_bot():
+	if not BOT_TOKEN:
+		raise ValueError("BOT_TOKEN não definido.")
+	app = Application.builder().token(BOT_TOKEN).build()
+	app.add_handler(CommandHandler("start", start))
+	app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, respond_to_message))
+	app.run_polling()
+
 api = FastAPI()
 
 @api.get("/")
-def root():
-	return {"status": "ok", "message": "Bot e API rodando 🚀"}
+def read_root():
+	return {"status": "ok", "message": "Bot está rodando no Render 🚀"}
 
-# --- Função principal ---
-async def main():
-	# Telegram bot
-	app_bot = Application.builder().token(BOT_TOKEN).build()
-	app_bot.add_handler(CommandHandler("start", start))
-	app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, respond_to_message))
-
-	# inicia bot sem encerrar o loop principal
-	await app_bot.initialize()
-	await app_bot.start()
-	await app_bot.updater.start_polling()
-
-	# inicia servidor FastAPI
-	config = uvicorn.Config(api, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
-	server = uvicorn.Server(config)
-	await server.serve()
-
-	# finalização graciosa (quando o uvicorn encerrar)
-	await app_bot.updater.stop()
-	await app_bot.stop()
-	await app_bot.shutdown()
+def run_http():
+	port = int(os.getenv("PORT", 8000))
+	uvicorn.run(api, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-	# aqui chamamos a função assíncrona corretamente
-	asyncio.run(main())
+	threading.Thread(target=run_bot, daemon=True).start()
+	run_http()
