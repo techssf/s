@@ -59,12 +59,43 @@ async def clear_bot_conflicts():
         # Close the temporary bot
         await temp_bot.close()
         
-        # Wait a bit to ensure cleanup
-        await asyncio.sleep(2)
+        # Shorter wait to avoid rate limiting
+        await asyncio.sleep(1)
         
     except Exception as e:
         logger.warning(f"Error during conflict cleanup: {e}")
-        pass
+        # Continue anyway - this is not critical
+        await asyncio.sleep(1)
+
+async def test_groq_connection():
+    """Test Groq API connection and find working model"""
+    models_to_test = [
+        "llama-3.1-8b-instant",
+        "llama-3.1-70b-versatile", 
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "mixtral-8x7b-32768",
+        "gemma-7b-it"
+    ]
+    
+    logger.info("Testing Groq API connection...")
+    
+    for model in models_to_test:
+        try:
+            resp = groq_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=10
+            )
+            if resp and resp.choices:
+                logger.info(f"✅ Model {model} is working!")
+                return model
+        except Exception as e:
+            logger.warning(f"❌ Model {model} failed: {e}")
+            continue
+    
+    logger.error("❌ No working Groq models found!")
+    return None
     """Test Groq API connection and find working model"""
     models_to_test = [
         "llama-3.1-70b-versatile",
@@ -116,12 +147,11 @@ async def chat(update: Update, context):
     
     # List of models to try (in order of preference)
     models_to_try = [
-        "llama-3.1-70b-versatile",
-        "llama-3.1-8b-instant", 
+        "llama-3.1-8b-instant",  # This one is working according to logs
         "llama3-70b-8192",
         "llama3-8b-8192",
-        "mixtral-8x7b-32768",
         "gemma-7b-it"
+        # Removed decommissioned models
     ]
     
     for model in models_to_try:
