@@ -22,13 +22,49 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 PORT = int(os.getenv("PORT", 10000))
 
+# Create a simple lock file to prevent multiple instances
+import tempfile
+import fcntl
+
+LOCK_FILE = "/tmp/bot_instance.lock"
+
+def acquire_lock():
+    """Acquire a file lock to ensure only one bot instance runs"""
+    try:
+        lock_file = open(LOCK_FILE, 'w')
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        logger.info("Successfully acquired instance lock")
+        return lock_file
+    except (IOError, OSError) as e:
+        logger.error(f"Could not acquire lock - another instance may be running: {e}")
+        return None
+
 # Initialize Groq client
 if not GROQ_KEY:
     logger.critical("GROQ_API_KEY not set in environment variables")
     raise ValueError("GROQ_API_KEY is required")
 groq_client = Groq(api_key=GROQ_KEY)
 
-async def test_groq_connection():
+async def clear_bot_conflicts():
+    """Clear any existing bot conflicts"""
+    try:
+        # Create a temporary bot instance just for cleanup
+        from telegram import Bot
+        temp_bot = Bot(token=BOT_TOKEN)
+        
+        # Delete webhook
+        await temp_bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Cleared existing webhooks and pending updates")
+        
+        # Close the temporary bot
+        await temp_bot.close()
+        
+        # Wait a bit to ensure cleanup
+        await asyncio.sleep(2)
+        
+    except Exception as e:
+        logger.warning(f"Error during conflict cleanup: {e}")
+        pass
     """Test Groq API connection and find working model"""
     models_to_test = [
         "llama-3.1-70b-versatile",
@@ -148,12 +184,20 @@ async def run_bot():
         logger.info("Starting Telegram bot with polling")
         await telegram_app.initialize()
         await telegram_app.start()
-        await telegram_app.updater.start_polling()
+        
+        # Clear any existing webhooks before starting polling
+        await telegram_app.bot.delete_webhook()
+        logger.info("Cleared existing webhooks")
+        
+        await telegram_app.updater.start_polling(
+            drop_pending_updates=True,  # Drop any pending updates
+            allowed_updates=None
+        )
         logger.info("Telegram bot polling started")
         
         # Keep running indefinitely
         while True:
-            await asyncio.sleep(1)
+            await asyncio.sleep(10)  # Increased sleep time
         
     except Exception as e:
         logger.critical(f"Failed to start bot: {e}")
@@ -173,6 +217,9 @@ async def main():
     try:
         logger.info("Starting main application")
         
+        # Clear any existing bot conflicts first
+        await clear_bot_conflicts()
+        
         # Test Groq connection first
         working_model = await test_groq_connection()
         if not working_model:
@@ -186,7 +233,16 @@ async def main():
         logger.info("Bot and server tasks created")
         
         # Wait for both tasks to complete (they shouldn't under normal circumstances)
-        await asyncio.gather(bot_task, server_task, return_exceptions=True)
+        done, pending = await asyncio.wait([bot_task, server_task], return_when=asyncio.FIRST_EXCEPTION)
+        
+        # If one task fails, cancel the others
+        for task in pending:
+            task.cancel()
+            
+        # Re-raise any exceptions
+        for task in done:
+            if task.exception():
+                raise task.exception()
         
     except Exception as e:
         logger.critical(f"Main loop error: {e}")
@@ -204,11 +260,28 @@ async def main():
                 logger.error(f"Error during bot shutdown: {e}")
 
 if __name__ == "__main__":
+    lock_file = None
     try:
         logger.info("Starting main application")
+        
+        # Try to acquire lock first
+        lock_file = acquire_lock()
+        if lock_file is None:
+            logger.critical("Another bot instance is already running!")
+            exit(1)
+            
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Application interrupted by user")
     except Exception as e:
         logger.critical(f"Main thread error: {e}")
         raise
+    finally:
+        # Release lock
+        if lock_file:
+            try:
+                lock_file.close()
+                import os
+                os.remove(LOCK_FILE)
+            except:
+                pass
