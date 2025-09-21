@@ -3,6 +3,7 @@ import threading
 import asyncio
 from fastapi import FastAPI
 import uvicorn
+import httpx
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 # 🔑 Tokens
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # render: def    ina no dashboard
