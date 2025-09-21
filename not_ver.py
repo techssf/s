@@ -50,7 +50,7 @@ async def chat(update: Update, context):
     try:
         # Use a supported model instead of the decommissioned one
         resp = groq_client.chat.completions.create(
-            model="llama3-8b-8192",  # Updated to supported model
+            model="groq/compound",  # Updated to supported model
             messages=[{"role": "user", "content": user_text}],
         )
         content = resp.choices[0].message.content if resp and resp.choices else "❌ Erro na resposta da API"
