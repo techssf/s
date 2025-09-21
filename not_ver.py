@@ -1,18 +1,19 @@
 import os
 import logging
 import asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import uvicorn
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from groq import Groq
+import json
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler()  # Only console output for Render
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
@@ -21,23 +22,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 PORT = int(os.getenv("PORT", 10000))
-
-# Create a simple lock file to prevent multiple instances
-import tempfile
-import fcntl
-
-LOCK_FILE = "/tmp/bot_instance.lock"
-
-def acquire_lock():
-    """Acquire a file lock to ensure only one bot instance runs"""
-    try:
-        lock_file = open(LOCK_FILE, 'w')
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        logger.info("Successfully acquired instance lock")
-        return lock_file
-    except (IOError, OSError) as e:
-        logger.error(f"Could not acquire lock - another instance may be running: {e}")
-        return None
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://s-2jdr.onrender.com")  # Your Render app URL
 
 # Initialize Groq client
 if not GROQ_KEY:
@@ -45,91 +30,39 @@ if not GROQ_KEY:
     raise ValueError("GROQ_API_KEY is required")
 groq_client = Groq(api_key=GROQ_KEY)
 
-async def clear_bot_conflicts():
-    """Clear any existing bot conflicts"""
-    try:
-        # Create a temporary bot instance just for cleanup
-        from telegram import Bot
-        temp_bot = Bot(token=BOT_TOKEN)
-        
-        # Delete webhook
-        await temp_bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Cleared existing webhooks and pending updates")
-        
-        # Close the temporary bot
-        await temp_bot.close()
-        
-        # Shorter wait to avoid rate limiting
-        await asyncio.sleep(1)
-        
-    except Exception as e:
-        logger.warning(f"Error during conflict cleanup: {e}")
-        # Continue anyway - this is not critical
-        await asyncio.sleep(1)
-
-async def test_groq_connection():
-    """Test Groq API connection and find working model"""
-    models_to_test = [
-        "llama-3.1-8b-instant",
-        "llama-3.1-70b-versatile", 
-        "llama3-70b-8192",
-        "llama3-8b-8192",
-        "mixtral-8x7b-32768",
-        "gemma-7b-it"
-    ]
-    
-    logger.info("Testing Groq API connection...")
-    
-    for model in models_to_test:
-        try:
-            resp = groq_client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=10
-            )
-            if resp and resp.choices:
-                logger.info(f"✅ Model {model} is working!")
-                return model
-        except Exception as e:
-            logger.warning(f"❌ Model {model} failed: {e}")
-            continue
-    
-    logger.error("❌ No working Groq models found!")
-    return None
-    """Test Groq API connection and find working model"""
-    models_to_test = [
-        "llama-3.1-70b-versatile",
-        "llama-3.1-8b-instant",
-        "llama3-70b-8192", 
-        "llama3-8b-8192",
-        "mixtral-8x7b-32768",
-        "gemma-7b-it"
-    ]
-    
-    logger.info("Testing Groq API connection...")
-    
-    for model in models_to_test:
-        try:
-            resp = groq_client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=10
-            )
-            if resp and resp.choices:
-                logger.info(f"✅ Model {model} is working!")
-                return model
-        except Exception as e:
-            logger.warning(f"❌ Model {model} failed: {e}")
-            continue
-    
-    logger.error("❌ No working Groq models found!")
-    return None
-
 # Initialize FastAPI app
 app = FastAPI()
 
 # Global variable for Telegram application
 telegram_app = None
+
+async def test_groq_connection():
+    """Test Groq API connection and find working model"""
+    models_to_test = [
+        "llama-3.1-8b-instant",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "gemma-7b-it"
+    ]
+    
+    logger.info("Testing Groq API connection...")
+    
+    for model in models_to_test:
+        try:
+            resp = groq_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=10
+            )
+            if resp and resp.choices:
+                logger.info(f"✅ Model {model} is working!")
+                return model
+        except Exception as e:
+            logger.warning(f"❌ Model {model} failed: {e}")
+            continue
+    
+    logger.error("❌ No working Groq models found!")
+    return None
 
 async def start(update: Update, context):
     logger.info(f"Received /start command from user {update.effective_user.id}")
@@ -145,13 +78,11 @@ async def chat(update: Update, context):
     user_id = update.effective_user.id
     logger.info(f"Received message from user {user_id}: {user_text[:50]}...")
     
-    # List of models to try (in order of preference)
     models_to_try = [
-        "llama-3.1-8b-instant",  # This one is working according to logs
+        "llama-3.1-8b-instant",
         "llama3-70b-8192",
         "llama3-8b-8192",
         "gemma-7b-it"
-        # Removed decommissioned models
     ]
     
     for model in models_to_try:
@@ -180,7 +111,6 @@ async def chat(update: Update, context):
             logger.error(f"Error with model {model} for user {user_id}: {e}")
             continue
     
-    # If all models failed
     error_msg = "❌ Desculpe, todos os modelos estão indisponíveis no momento. Tente novamente mais tarde."
     await update.message.reply_text(error_msg)
     logger.error(f"All models failed for user {user_id}")
@@ -194,13 +124,57 @@ def setup_handlers(application: Application):
 @app.get("/")
 async def index():
     logger.info("Received GET request to root")
-    return {"status": "ok"}
+    return {"status": "Bot is running", "webhook": "active"}
 
-@app.post("/")
-async def webhook():
-    return {"status": "ok"}
+@app.post("/webhook")
+async def webhook_handler(request: Request):
+    """Handle incoming webhook updates from Telegram"""
+    try:
+        # Get the raw request body
+        body = await request.body()
+        
+        # Parse the JSON
+        update_data = json.loads(body.decode('utf-8'))
+        logger.info(f"Received webhook update: {update_data.get('update_id', 'unknown')}")
+        
+        # Create Update object
+        update = Update.de_json(update_data, telegram_app.bot)
+        
+        # Process the update
+        if telegram_app:
+            await telegram_app.process_update(update)
+            
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return {"status": "error", "message": str(e)}
 
-async def run_bot():
+async def setup_webhook():
+    """Setup webhook instead of polling to avoid conflicts"""
+    try:
+        if not telegram_app:
+            return
+            
+        webhook_url = f"{WEBHOOK_URL}/webhook"
+        logger.info(f"Setting up webhook: {webhook_url}")
+        
+        # Delete any existing webhook
+        await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Cleared existing webhook")
+        
+        # Set the new webhook
+        await telegram_app.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=["message", "callback_query"]
+        )
+        logger.info(f"✅ Webhook set successfully: {webhook_url}")
+        
+    except Exception as e:
+        logger.error(f"Error setting up webhook: {e}")
+        raise
+
+async def init_telegram_app():
+    """Initialize Telegram application"""
     global telegram_app
     try:
         logger.info("Initializing Telegram application")
@@ -211,107 +185,65 @@ async def run_bot():
         telegram_app = Application.builder().token(BOT_TOKEN).build()
         setup_handlers(telegram_app)
 
-        logger.info("Starting Telegram bot with polling")
+        # Initialize the application
         await telegram_app.initialize()
         await telegram_app.start()
         
-        # Clear any existing webhooks before starting polling
-        await telegram_app.bot.delete_webhook()
-        logger.info("Cleared existing webhooks")
+        # Setup webhook
+        await setup_webhook()
         
-        await telegram_app.updater.start_polling(
-            drop_pending_updates=True,  # Drop any pending updates
-            allowed_updates=None
-        )
-        logger.info("Telegram bot polling started")
-        
-        # Keep running indefinitely
-        while True:
-            await asyncio.sleep(10)  # Increased sleep time
+        logger.info("✅ Telegram application initialized with webhook")
         
     except Exception as e:
-        logger.critical(f"Failed to start bot: {e}")
+        logger.critical(f"Failed to initialize Telegram app: {e}")
         raise
 
-async def run_server():
-    try:
-        logger.info(f"Starting Uvicorn on port {PORT}")
-        config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
-        server = uvicorn.Server(config)
-        await server.serve()
-    except Exception as e:
-        logger.error(f"Server error: {e}")
-        raise
+@app.on_event("startup")
+async def startup_event():
+    """FastAPI startup event"""
+    logger.info("FastAPI starting up...")
+    
+    # Test Groq connection
+    working_model = await test_groq_connection()
+    if not working_model:
+        logger.warning("No working Groq models found, but continuing...")
+    
+    # Initialize Telegram
+    await init_telegram_app()
+    
+    logger.info("✅ Application startup complete")
 
-async def main():
-    try:
-        logger.info("Starting main application")
-        
-        # Clear any existing bot conflicts first
-        await clear_bot_conflicts()
-        
-        # Test Groq connection first
-        working_model = await test_groq_connection()
-        if not working_model:
-            logger.critical("No working Groq models found. Check your API key and model availability.")
-            # Don't return, let it try to run anyway
-        
-        # Create both tasks
-        bot_task = asyncio.create_task(run_bot())
-        server_task = asyncio.create_task(run_server())
-        
-        logger.info("Bot and server tasks created")
-        
-        # Wait for both tasks to complete (they shouldn't under normal circumstances)
-        done, pending = await asyncio.wait([bot_task, server_task], return_when=asyncio.FIRST_EXCEPTION)
-        
-        # If one task fails, cancel the others
-        for task in pending:
-            task.cancel()
-            
-        # Re-raise any exceptions
-        for task in done:
-            if task.exception():
-                raise task.exception()
-        
-    except Exception as e:
-        logger.critical(f"Main loop error: {e}")
-        raise
-    finally:
-        # Ensure cleanup if the server stops
-        if telegram_app:
-            logger.info("Stopping Telegram bot")
-            try:
-                await telegram_app.updater.stop()
-                await telegram_app.stop()
-                await telegram_app.shutdown()
-                logger.info("Telegram bot shut down")
-            except Exception as e:
-                logger.error(f"Error during bot shutdown: {e}")
+@app.on_event("shutdown") 
+async def shutdown_event():
+    """FastAPI shutdown event"""
+    logger.info("FastAPI shutting down...")
+    
+    if telegram_app:
+        try:
+            await telegram_app.bot.delete_webhook()
+            await telegram_app.stop()
+            await telegram_app.shutdown()
+            logger.info("✅ Telegram application shut down")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
+
+def main():
+    """Main function to run the application"""
+    logger.info("Starting application with webhook mode")
+    
+    # Run the FastAPI app
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=PORT,
+        log_level="info"
+    )
 
 if __name__ == "__main__":
-    lock_file = None
     try:
-        logger.info("Starting main application")
-        
-        # Try to acquire lock first
-        lock_file = acquire_lock()
-        if lock_file is None:
-            logger.critical("Another bot instance is already running!")
-            exit(1)
-            
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         logger.info("Application interrupted by user")
     except Exception as e:
-        logger.critical(f"Main thread error: {e}")
+        logger.critical(f"Application error: {e}")
         raise
-    finally:
-        # Release lock
-        if lock_file:
-            try:
-                lock_file.close()
-                import os
-                os.remove(LOCK_FILE)
-            except:
-                pass
