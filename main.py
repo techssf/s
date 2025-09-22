@@ -1,4 +1,4 @@
-# token = "8365512729:AAEB3mcMebk2_wi3mezaApT21DVHoQe8_oM"
+# token = "s"
 
 # import os
 # from telegram.ext import Application, CommandHandler, MessageHandler, filters
