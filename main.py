@@ -50,11 +50,13 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, respond
 async def webhook(request: Request):
     update = Update.de_json(await request.json(), telegram_app.bot)
     await telegram_app.process_update(update)
+    print("kkkk aqui1")
     return Response(status_code=status.HTTP_200_OK)
 
 @app.on_event('startup')
 async def startup():
-    await telegram_app.bot.set_webhook(f'https://{os.getenv("VERCEL_URL")}/webhook')
+    print("kkkk 77777 ===================================== 828")
+    await telegram_app.bot.set_webhook(f'https://https://s-zeta-dusky.vercel.app/webhook')
 
 @app.get('/')
 async def root():
