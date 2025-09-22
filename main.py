@@ -30,7 +30,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from telegram import Update
 from fastapi import FastAPI, Request, Response, status
 
-token = os.getenv('TELEGRAM_TOKEN', '8365512729:AAEB3mcMebk2_wi3mezaApT21DVHoQe8_oM')
+token = os.getenv('TELEGRAM_TOKEN')
 
 app = FastAPI()
 
