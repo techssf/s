@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 PORT = int(os.getenv("PORT", 10000))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://s-2jdr.onrender.com")  # Your Render app URL
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://s-2jdr.onrender.com") 
 
 # Initialize Groq client
 if not GROQ_KEY:
